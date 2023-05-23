@@ -36,10 +36,11 @@ module.exports.revus = async (event) => {
             body: JSON.stringify({ error: 'Invalid parameter type: reviews. Expected string.' }),
           };
         } else {
-            console.log('body------->>', body.reviews)
             const dataRec = {
               // prompt: `Given the following customer reviews for a product, summarize the reviews and identify recurring problems that are mentioned in 2 or more reviews. After each response add * symbol:\n\n${allReviews}\n\n`,
-              prompt: `Summarize all of given customer reviews. Also tell me how many customers are mentioning same problem or positive feedback :\n\n${body.reviews}\n\n`,
+            //   prompt: `Summarize all of given customer reviews. Also tell me how many customers are mentioning same problem or positive feedback :\n\n${body.reviews}\n\n`,
+              // prompt: `Summarize each customer review in maximum 6 word sentence. Also summarize all reviews in one sentence at the end :\n\n${body.reviews}\n\n`,
+              prompt: `Your task is to generate summary of a product review from an ecommerce site.\n\nSummarize reviews below, delimited by triple ^, in at most 20 words.\n\n Reviews: ^^^${body.reviews}^^^`,
               temperature: 0.7,
               model: "text-davinci-002",
               max_tokens: 150,
