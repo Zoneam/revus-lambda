@@ -40,7 +40,13 @@ module.exports.revus = async (event) => {
               // prompt: `Given the following customer reviews for a product, summarize the reviews and identify recurring problems that are mentioned in 2 or more reviews. After each response add * symbol:\n\n${allReviews}\n\n`,
             //   prompt: `Summarize all of given customer reviews. Also tell me how many customers are mentioning same problem or positive feedback :\n\n${body.reviews}\n\n`,
               // prompt: `Summarize each customer review in maximum 6 word sentence. Also summarize all reviews in one sentence at the end :\n\n${body.reviews}\n\n`,
-              prompt: `Your task is to generate summary of a product review from an ecommerce site.\n\nSummarize reviews below, delimited by triple ^, in at most 20 words.\n\n Reviews: ^^^${body.reviews}^^^`,
+              prompt: `Your task is to generate summary of a product reviews from an e-commerce website.
+              Summarize reviews below, delimited by triple ^.
+              The summary is intended for customers to get general idea about overall quality of the product so should include all positive and negative comments.
+              After writing summary identify a list of emotions that the writers of the following reviews are expressing. Format your answer as a list of lower-case words separated by commas in 2 bullet points grouped /nPositive and /nNegative.
+              Each positive word in your response wrap in <span class="positive"> and similarly each negative word in your response wrap in <span class="negative">  
+
+              Reviews: ^^^${body.reviews}^^^`,
               temperature: 0.7,
               model: "text-davinci-002",
               max_tokens: 150,
