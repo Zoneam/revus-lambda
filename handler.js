@@ -34,25 +34,39 @@ module.exports.register = async (event) => {
     let body;
     
     try {
-        body = JSON.parse(event.body);
-    } catch (e) {
-        return respond(400, { error: 'Could not parse JSON body' });
+      body = JSON.parse(event.body);
+    } catch (error) {
+      return respond(400, { error: 'Could not parse JSON body' });
     }
-
-    if (!body || !body.password) {
-        return respond(400, { error: 'No password provided' });
-    }
-
-    const hashedPassword = bcrypt.hashSync(body.password, 10);
+  
+    const { email, password } = body;
     
-    const client = await MongoClient.connect(MONGODB_URI);
-    const db = client.db('revus');
-    await db.collection('users').insertOne({ email: body.email, password: hashedPassword });
-
-    client.close();
-
-    return respond(200, { message: 'Registration successful' });
-};
+    if (!email || !password) {
+      return respond(400, { error: 'Email and password are required' });
+    }
+  
+    let client;
+    
+    try {
+      const hashedPassword = await bcrypt.hash(password, 10);
+      client = await MongoClient.connect(MONGODB_URI, { useNewUrlParser: true, useUnifiedTopology: true });
+      const db = client.db('revus');
+      const existingUser = await db.collection('users').findOne({ email });
+      
+      if (existingUser) {
+        return respond(400, { error: 'Email already in use' });
+      }
+  
+      await db.collection('users').insertOne({ email, password: hashedPassword });
+      return respond(200, { message: 'Registration successful' });
+    } catch (error) {
+      return respond(500, { error: 'Internal server error' });
+    } finally {
+      if (client) {
+        client.close();
+      }
+    }
+  };
 
 // LOGIN FUNCTION
 module.exports.login = async (event) => {
