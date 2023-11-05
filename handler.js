@@ -1,8 +1,12 @@
 const axios = require('axios');
+const jwt = require('jsonwebtoken');
+const bcrypt = require('bcryptjs'); 
+const MongoClient = require('mongodb').MongoClient;
 
 const corsHeaders = {
     'Access-Control-Allow-Origin': '*',
     'Access-Control-Allow-Headers': 'Content-Type',
+    "Access-Control-Allow-Credentials" : true,
     'Access-Control-Allow-Methods': 'POST', 
 };
 
@@ -12,29 +16,74 @@ const HEADERS = {
     Authorization: `Bearer ${process.env.OPENAI_API_KEY}`,
 };
 
+const MONGODB_URI = process.env.MONGODB_CONNECTION_STRING;
+
 const respond = (statusCode, body, headers = corsHeaders) => ({
     statusCode,
     headers,
     body: JSON.stringify(body),
 });
 
-const isPostMethod = (httpMethod) => httpMethod === 'POST';
+// REGISTER FUNCTION
+module.exports.register = async (event) => {
+    let body;
+    
+    try {
+        body = JSON.parse(event.body);
+    } catch (e) {
+        return respond(400, { error: 'Could not parse JSON body' });
+    }
 
+    if (!body || !body.password) {
+        return respond(400, { error: 'No password provided' });
+    }
+
+    const hashedPassword = bcrypt.hashSync(body.password, 10);
+    
+    const client = await MongoClient.connect(MONGODB_URI);
+    const db = client.db('revus');
+    await db.collection('users').insertOne({ email: body.email, password: hashedPassword });
+
+    client.close();
+
+    return respond(200, { message: 'Registration successful' });
+};
+
+// LOGIN FUNCTION
+module.exports.login = async (event) => {
+    const body = JSON.parse(event.body);
+    
+    const client = await MongoClient.connect(MONGODB_URI);
+    const db = client.db('revus');
+    const user = await db.collection('users').findOne({ email: body.email });
+
+    client.close();
+
+    if (!user || !bcrypt.compareSync(body.password, user.password)) {
+        return respond(400, { error: 'Invalid email or password' });
+    }
+
+    const token = jwt.sign({ userId: user._id }, process.env.SECRET, { expiresIn: '1h' });
+
+    return respond(200, { token });
+};
+
+
+// REVUS FUNCTION
 module.exports.revus = async (event) => {
-    if (!isPostMethod(event.httpMethod)) {
-        return respond(400, { error: 'Invalid request method. Only POST requests are allowed.' });
+    const token = event.headers.Authorization || event.headers.authorization;
+    if (!token) {
+        return respond(401, { error: 'Authorization header missing' });
+    }
+
+    try {
+        jwt.verify(token, process.env.SECRET);
+    } catch (error) {
+        return respond(401, { error: 'Token verification failed' });
     }
 
     try {
         const body = JSON.parse(event.body);
-
-        if (!body.reviews) {
-            return respond(400, { error: 'Missing required parameter: reviews' });
-        } 
-        
-        if (typeof body.reviews !== 'string') {
-            return respond(400, { error: 'Invalid parameter type: reviews. Expected string.' });
-        } 
 
         const dataRec = {
             prompt: `Provide a balanced summary of the following reviews in up to four sentences. Make sure to highlight both positive and negative comments. After the summary, list emotions expressed in the reviews, categorized into 'Positive' and 'Negative'.
