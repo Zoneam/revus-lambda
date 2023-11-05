@@ -18,7 +18,12 @@ const HEADERS = {
 
 const MONGODB_URI = process.env.MONGODB_CONNECTION_STRING;
 
-const respond = (statusCode, body, headers = corsHeaders) => ({
+const respond = (statusCode, body, headers = {
+    'Access-Control-Allow-Origin': '*',
+    'Access-Control-Allow-Headers': 'Content-Type',
+    'Access-Control-Allow-Credentials': true,
+    'Access-Control-Allow-Methods': 'POST',
+}) => ({
     statusCode,
     headers,
     body: JSON.stringify(body),
@@ -51,21 +56,51 @@ module.exports.register = async (event) => {
 
 // LOGIN FUNCTION
 module.exports.login = async (event) => {
-    const body = JSON.parse(event.body);
-    
-    const client = await MongoClient.connect(MONGODB_URI);
-    const db = client.db('revus');
-    const user = await db.collection('users').findOne({ email: body.email });
+    const { body: rawBody } = event;
+    let body;
 
-    client.close();
-
-    if (!user || !bcrypt.compareSync(body.password, user.password)) {
-        return respond(400, { error: 'Invalid email or password' });
+    if (!rawBody) {
+        return respond(400, { error: 'No data submitted' });
     }
 
-    const token = jwt.sign({ userId: user._id }, process.env.SECRET, { expiresIn: '1h' });
+    try {
+        body = JSON.parse(rawBody);
+    } catch (error) {
+        return respond(400, { error: 'Could not parse JSON body' });
+    }
 
-    return respond(200, { token });
+    const { email, password } = body;
+    if (!email || !password) {
+        return respond(400, { error: 'Email and password are required' });
+    }
+
+    let client;
+
+    try {
+        client = await MongoClient.connect(MONGODB_URI, { useNewUrlParser: true, useUnifiedTopology: true });
+        const db = client.db('revus');
+        const user = await db.collection('users').findOne({ email });
+
+        if (!user) {
+            return respond(400, { error: 'Invalid email or password' });
+        }
+
+        const isMatch = await bcrypt.compare(password, user.password);
+        if (!isMatch) {
+            return respond(400, { error: 'Invalid email or password' });
+        }
+
+        const { _id } = user;
+        const token = jwt.sign({ userId: _id }, process.env.SECRET, { expiresIn: '1h' });
+
+        return respond(200, { token });
+    } catch (error) {
+        return respond(500, { error: error.message });
+    } finally {
+        if (client) {
+            client.close();
+        }
+    }
 };
 
 
