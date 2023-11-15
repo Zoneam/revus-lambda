@@ -3,13 +3,6 @@ const jwt = require('jsonwebtoken');
 const bcrypt = require('bcryptjs'); 
 const MongoClient = require('mongodb').MongoClient;
 
-const corsHeaders = {
-    'Access-Control-Allow-Origin': '*',
-    'Access-Control-Allow-Headers': 'Content-Type',
-    "Access-Control-Allow-Credentials" : true,
-    'Access-Control-Allow-Methods': 'POST', 
-};
-
 const OPENAI_API_URL = 'https://api.openai.com/v1/completions';
 const HEADERS = {
     'Content-Type': 'application/json',
@@ -19,10 +12,9 @@ const HEADERS = {
 const MONGODB_URI = process.env.MONGODB_CONNECTION_STRING;
 
 const respond = (statusCode, body, headers = {
-    'Access-Control-Allow-Origin': '*',
-    'Access-Control-Allow-Headers': 'Content-Type',
-    'Access-Control-Allow-Credentials': true,
-    'Access-Control-Allow-Methods': 'POST',
+    "Access-Control-Allow-Origin": "*", 
+    "Access-Control-Allow-Headers": "Content-Type,Authorization",
+    "Access-Control-Allow-Methods": "OPTIONS,GET,POST"
 }) => ({
     statusCode,
     headers,
@@ -120,20 +112,24 @@ module.exports.login = async (event) => {
 
 // REVUS FUNCTION
 module.exports.revus = async (event) => {
-    const token = event.headers.Authorization || event.headers.authorization;
+    let token = event.headers.Authorization || event.headers.authorization;
     if (!token) {
         return respond(401, { error: 'Authorization header missing' });
     }
-
+    const bearer = 'Bearer ';
+    if (token.startsWith(bearer)) {
+        token = token.slice(bearer.length, token.length);
+    } else {
+        return respond(401, { error: 'Invalid Authorization header format' });
+    }
     try {
         jwt.verify(token, process.env.SECRET);
     } catch (error) {
+        console.log('3:',error);
         return respond(401, { error: 'Token verification failed' });
     }
-
     try {
         const body = JSON.parse(event.body);
-
         const dataRec = {
             prompt: `Provide a balanced summary of the following reviews in up to four sentences. Make sure to highlight both positive and negative comments. After the summary, list emotions expressed in the reviews, categorized into 'Positive' and 'Negative'.
 
@@ -145,9 +141,7 @@ module.exports.revus = async (event) => {
             frequency_penalty: 0,
             presence_penalty: 0,
         };
-
         const { data } = await axios.post(OPENAI_API_URL, dataRec, { headers: HEADERS });
-        
         return respond(200, data.choices[0].text);
     } catch (error) {
         if (error instanceof SyntaxError) {
