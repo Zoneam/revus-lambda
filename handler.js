@@ -3,7 +3,7 @@ const jwt = require('jsonwebtoken');
 const bcrypt = require('bcryptjs'); 
 const MongoClient = require('mongodb').MongoClient;
 
-const OPENAI_API_URL = 'https://api.openai.com/v1/completions';
+const OPENAI_API_URL = 'https://api.openai.com/v1/chat/completions';
 const HEADERS = {
     'Content-Type': 'application/json',
     Authorization: `Bearer ${process.env.OPENAI_API_KEY}`,
@@ -24,7 +24,6 @@ const respond = (statusCode, body, headers = {
 // REGISTER FUNCTION
 module.exports.register = async (event) => {
     let body;
-    
     try {
       body = JSON.parse(event.body);
     } catch (error) {
@@ -113,9 +112,7 @@ module.exports.login = async (event) => {
 // REVUS FUNCTION
 module.exports.revus = async (event) => {
     let token = event.headers.Authorization || event.headers.authorization;
-    if (!token) {
-        return respond(401, { error: 'Authorization header missing' });
-    }
+    if (!token) return respond(401, { error: 'Authorization header missing' });
     const bearer = 'Bearer ';
     if (token.startsWith(bearer)) {
         token = token.slice(bearer.length, token.length);
@@ -125,29 +122,40 @@ module.exports.revus = async (event) => {
     try {
         jwt.verify(token, process.env.SECRET);
     } catch (error) {
-        console.log('3:',error);
-        return respond(401, { error: 'Token verification failed' });
+        return respond(401, { error: 'Token verification failed', details: error.message });
     }
     try {
         const body = JSON.parse(event.body);
+        if (!body.reviews) return respond(400, { error: 'Invalid reviews data' });
         const dataRec = {
-            prompt: `Provide a balanced summary of the following reviews in up to four sentences. Make sure to highlight both positive and negative comments. After the summary, list emotions expressed in the reviews, categorized into 'Positive' and 'Negative'.
-
-            Reviews: ^^^${body.reviews}^^^`,
-            temperature: 0.7,
-            model: "text-davinci-002",
-            max_tokens: 150,
+            messages: [
+                {
+                    role: "system",
+                    content: `You will be provided with Amazon product reviews, and your task is to summarize the reviews in 3 sentences and put them in the following format, starting with new line and ending with new line:
+        
+                    ⭐ Overall summary of all reviews
+                    ⭐ Positive reviews summary
+                    ⭐ Negative reviews summary`
+                },
+                {
+                    role: "user",
+                    content: body.reviews.join("\n\n")
+                }
+            ],
+            temperature: 0.5,
+            model: "gpt-3.5-turbo",
+            max_tokens: 256,
             top_p: 1,
             frequency_penalty: 0,
             presence_penalty: 0,
         };
         const { data } = await axios.post(OPENAI_API_URL, dataRec, { headers: HEADERS });
-        return respond(200, data.choices[0].text);
+        return respond(200, data.choices[0].message.content);
     } catch (error) {
+        console.log('Error:', error);
         if (error instanceof SyntaxError) {
             return respond(400, { error: 'Invalid JSON data', event: event.body });
         }
-        
-        return respond(500, { error: error.message });
+        return respond(500, { error: 'Internal server error' });
     }
 };
