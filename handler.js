@@ -1,18 +1,28 @@
 const axios = require('axios');
 const jwt = require('jsonwebtoken');
-const bcrypt = require('bcryptjs'); 
-const MongoClient = require('mongodb').MongoClient;
+const bcrypt = require('bcryptjs');
+const { MongoClient } = require('mongodb');
 
+// Environment and external service variables
 const OPENAI_API_URL = 'https://api.openai.com/v1/chat/completions';
+const MONGODB_URI = process.env.MONGODB_CONNECTION_STRING;
+const SECRET = process.env.SECRET || 'default_secret';
 const HEADERS = {
     'Content-Type': 'application/json',
     Authorization: `Bearer ${process.env.OPENAI_API_KEY}`,
 };
 
-const MONGODB_URI = process.env.MONGODB_CONNECTION_STRING;
+// Helper function to connect to the database
+const connectToDB = async () => {
+    return MongoClient.connect(MONGODB_URI, {
+        useNewUrlParser: true,
+        useUnifiedTopology: true,
+    });
+};
 
+// Centralized response function with default headers
 const respond = (statusCode, body, headers = {
-    "Access-Control-Allow-Origin": "*", 
+    "Access-Control-Allow-Origin": "*",
     "Access-Control-Allow-Headers": "Content-Type,Authorization",
     "Access-Control-Allow-Methods": "OPTIONS,GET,POST"
 }) => ({
@@ -21,118 +31,94 @@ const respond = (statusCode, body, headers = {
     body: JSON.stringify(body),
 });
 
-// REGISTER FUNCTION
-module.exports.register = async (event) => {
-    let body;
+// Token verification helper
+const verifyToken = (token) => {
     try {
-      body = JSON.parse(event.body);
+        jwt.verify(token, SECRET);
+        return true;
     } catch (error) {
-      return respond(400, { error: 'Could not parse JSON body' });
-    }
-  
-    const { email, password } = body;
-    
-    if (!email || !password) {
-      return respond(400, { error: 'Email and password are required' });
-    }
-  
-    let client;
-    
-    try {
-      const hashedPassword = await bcrypt.hash(password, 10);
-      client = await MongoClient.connect(MONGODB_URI, { useNewUrlParser: true, useUnifiedTopology: true });
-      const db = client.db('revus');
-      const existingUser = await db.collection('users').findOne({ email });
-      
-      if (existingUser) {
-        return respond(400, { error: 'Email already in use' });
-      }
-  
-      await db.collection('users').insertOne({ email, password: hashedPassword });
-      return respond(200, { message: 'Registration successful' });
-    } catch (error) {
-      return respond(500, { error: 'Internal server error' });
-    } finally {
-      if (client) {
-        client.close();
-      }
-    }
-  };
-
-// LOGIN FUNCTION
-module.exports.login = async (event) => {
-    const { body: rawBody } = event;
-    let body;
-
-    if (!rawBody) {
-        return respond(400, { error: 'No data submitted' });
-    }
-
-    try {
-        body = JSON.parse(rawBody);
-    } catch (error) {
-        return respond(400, { error: 'Could not parse JSON body' });
-    }
-
-    const { email, password } = body;
-    if (!email || !password) {
-        return respond(400, { error: 'Email and password are required' });
-    }
-
-    let client;
-
-    try {
-        client = await MongoClient.connect(MONGODB_URI, { useNewUrlParser: true, useUnifiedTopology: true });
-        const db = client.db('revus');
-        const user = await db.collection('users').findOne({ email });
-
-        if (!user) {
-            return respond(400, { error: 'Invalid email or password' });
-        }
-
-        const isMatch = await bcrypt.compare(password, user.password);
-        if (!isMatch) {
-            return respond(400, { error: 'Invalid email or password' });
-        }
-
-        const { _id } = user;
-        const token = jwt.sign({ userId: _id }, process.env.SECRET, { expiresIn: '1h' });
-
-        return respond(200, { token });
-    } catch (error) {
-        return respond(500, { error: error.message });
-    } finally {
-        if (client) {
-            client.close();
-        }
+        throw new Error('Token verification failed: ' + error.message);
     }
 };
 
+// REGISTER FUNCTION
+module.exports.register = async (event) => {
+    try {
+        const body = JSON.parse(event.body);
+        const { email, password } = body || {};
+
+        if (!email || !password) {
+            return respond(400, { error: 'Email and password are required' });
+        }
+
+        const hashedPassword = await bcrypt.hash(password, 10);
+
+        let client = await connectToDB();
+        const db = client.db('revus');
+        const existingUser = await db.collection('users').findOne({ email });
+
+        if (existingUser) {
+            return respond(400, { error: 'Email already in use' });
+        }
+
+        await db.collection('users').insertOne({ email, password: hashedPassword });
+        return respond(200, { message: 'Registration successful' });
+    } catch (error) {
+        return respond(500, { error: 'Internal server error', details: error.message });
+    }
+};
+
+// LOGIN FUNCTION
+module.exports.login = async (event) => {
+    try {
+        const body = JSON.parse(event.body);
+        const { email, password } = body || {};
+
+        if (!email || !password) {
+            return respond(400, { error: 'Email and password are required' });
+        }
+
+        let client = await connectToDB();
+        const db = client.db('revus');
+        const user = await db.collection('users').findOne({ email });
+
+        if (!user || !(await bcrypt.compare(password, user.password))) {
+            return respond(400, { error: 'Invalid email or password' });
+        }
+
+        const token = jwt.sign({ userId: user._id }, SECRET, { expiresIn: '1h' });
+        return respond(200, { token });
+    } catch (error) {
+        return respond(500, { error: 'Internal server error', details: error.message });
+    }
+};
 
 // REVUS FUNCTION
 module.exports.revus = async (event) => {
-    let token = event.headers.Authorization || event.headers.authorization;
-    if (!token) return respond(401, { error: 'Authorization header missing' });
-    const bearer = 'Bearer ';
-    if (token.startsWith(bearer)) {
-        token = token.slice(bearer.length, token.length);
-    } else {
-        return respond(401, { error: 'Invalid Authorization header format' });
-    }
     try {
-        jwt.verify(token, process.env.SECRET);
-    } catch (error) {
-        return respond(401, { error: 'Token verification failed', details: error.message });
-    }
-    try {
+        // Token validation
+        let token = event.headers.Authorization || event.headers.authorization;
+        if (!token) return respond(401, { error: 'Authorization header missing' });
+
+        const bearerPrefix = 'Bearer ';
+        if (token.startsWith(bearerPrefix)) {
+            token = token.slice(bearerPrefix.length);
+        } else {
+            return respond(401, { error: 'Invalid Authorization header format' });
+        }
+
+        verifyToken(token);
+
+        // Process reviews
         const body = JSON.parse(event.body);
         if (!body.reviews) return respond(400, { error: 'Invalid reviews data' });
+
         const dataRec = {
             messages: [
                 {
                     role: "system",
                     content: `You will be provided with Amazon product reviews, and your task is to summarize the reviews in 3 sentences and put them in the following format, starting with new line and ending with new line:
-        
+                    
                     ⭐ Overall summary of all reviews
                     ⭐ Positive reviews summary
                     ⭐ Negative reviews summary`
@@ -149,13 +135,14 @@ module.exports.revus = async (event) => {
             frequency_penalty: 0,
             presence_penalty: 0,
         };
+
         const { data } = await axios.post(OPENAI_API_URL, dataRec, { headers: HEADERS });
-        return respond(200, data.choices[0].message.content);
+        return respond(200, { summary: data.choices[0].message.content });
     } catch (error) {
-        console.log('Error:', error);
+        console.error('Error:', error);
         if (error instanceof SyntaxError) {
             return respond(400, { error: 'Invalid JSON data', event: event.body });
         }
-        return respond(500, { error: 'Internal server error' });
+        return respond(500, { error: 'Internal server error', details: error.message });
     }
 };
